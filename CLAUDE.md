@@ -33,7 +33,9 @@ cues = finalize(raw_cues)  # oynatmaya hazır, bitmiş cue listesi
   hazır hale getirir (lead + duraklama yumuşatma + açıklık gömülü).
 
 Yardımcı fonksiyonlar: `smooth_cues(cues, calm)` (0-100, gereksiz kısa
-cue'ları komşusuna katarak hareketi sadeleştirir), `split_sentences(text)`
+cue'ları komşusuna katarak hareketi sadeleştirir — **HAM cue'lar üzerinde,
+yani `finalize`'dan ÖNCE çağrılır**; finalized cue'lara uygulanırsa KeyError
+verir), `split_sentences(text)`
 (uzun metni cümlelere böler — streaming/parça-parça TTS senaryosunda
 kullanışlı), `normalize_tr(text)` (yalnız hizalayıcının gördüğü metni
 normalize eder; TTS'e giden asıl metni DEĞİŞTİRMEZ).

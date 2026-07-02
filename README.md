@@ -1,5 +1,9 @@
 # Vislign
 
+*Turkish lip-sync / viseme generator: give it audio + the spoken text, get an
+accurate, ready-to-play mouth-shape timeline via forced alignment. Works with
+any TTS engine. Docs below are in Turkish.*
+
 **Türkçe için özelleştirilmiş bir viseme (ağız-şekli) üreteci.** Metin ve sesi
 verirsin, sana o sesin her anında ağzın hangi şekilde olması gerektiğini
 söyleyen bir zaman çizelgesi döner. Konuşan avatar / dijital insan / dublaj
@@ -28,7 +32,7 @@ olsun) — Vislign'ı sesin üstüne aynen takabilirsin.
 ## Nasıl çalışır (kısaca)
 
 1. **Metni normalize et** — rakamları okunuşa çevir ("2024" → "iki bin yirmi
-   dört"), kısaltmaları hecele ("SMS" → "es em es"), %/tarih/saat/₺ gibi
+   dört"), kısaltmaları hecele ("KVKK" → "ka ve ka ka"), %/tarih/saat/₺ gibi
    işaretleri sözcüğe çevir, Türkçe büyük/küçük harf kurallarını uygula.
 2. **Metin + sesi hizala** — açık kaynak bir konuşma-hizalama modeli
    (`torchaudio`'nun MMS Forced Aligner'ı) her harfin sesin içinde tam olarak
