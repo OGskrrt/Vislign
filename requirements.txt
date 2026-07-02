@@ -1,0 +1,5 @@
+torch>=2.5
+torchaudio>=2.5
+numpy
+certifi
+soundfile
