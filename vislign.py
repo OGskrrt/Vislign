@@ -214,7 +214,7 @@ def _words(text):
     return rom_words, orig_words, vis_words
 
 
-def align_visemes(pcm: bytes, sr: int, text: str, min_ms: int = 55):
+def align_visemes(pcm: bytes, sr: int, text: str, min_ms: int = 35):
     """Force-align text↔WAV and emit letter-timed viseme cues."""
     _ensure()
     x = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
