@@ -9,8 +9,9 @@ the alignment model. That gives much more accurate, much richer lip-sync — and
 because it's just text+audio, it works with ANY TTS engine, not a specific one.
 
 This build ships a Turkish letter->viseme table and Turkish-specific text
-normalization (numbers, abbreviations, %, dates/times, İ/I casing, ğ handling).
-Porting to another language means swapping the `_VIS` table and `normalize_tr`.
+normalization (numbers, ordinals, units, abbreviations, %, dates/times, e-mail,
+İ/I casing, ğ handling). Porting to another language means swapping the `_VIS`
+table and `normalize_tr`.
 
 Two stages:
   align_visemes(pcm, sr, text) -> raw cues [{offset,end,value,id,ph}]  (true phoneme timing)
@@ -39,9 +40,9 @@ _ROMANIZE = str.maketrans({
     "â": "a", "î": "i", "û": "u", "Â": "a", "Î": "i", "Û": "u",
 })
 
-# Turkish letter -> (portable viseme name, reference-rig viseme id). Reference
-# rig calibration: 0=rest 2=a 4=e 6=i/ı(wide) 7=u/ü(round-narrow) 8=o/ö(round-open)
-# 21=closed(MBP) 18=F/V 19=T/D/N/R 15=S/Z 16=Ş/Ç/C/J 20=K/G 14=L 12=H
+# Turkish letter -> (portable viseme name, this-rig viseme id). Rig calibration:
+# 0=rest 2=a 4=e 6=i/ı(wide) 7=u/ü(round-narrow) 8=o/ö(round-open) 21=closed(MBP)
+# 18=F/V 19=T/D/N/R 15=S/Z 16=Ş/Ç/C/J 20=K/G/Ğ 14=L 12=H
 _VIS = {
     "a": ("AA", 2), "e": ("E", 4),
     "ı": ("II", 6), "i": ("II", 6), "y": ("II", 6),
@@ -119,6 +120,35 @@ _LETTER_NAME = {"a": "a", "b": "be", "c": "ce", "ç": "çe", "d": "de", "e": "e"
                 "y": "ye", "z": "ze", "w": "çift ve", "x": "iks", "q": "kü"}
 _DOT_ABBREV = {"dr": "doktor", "prof": "profesör", "doç": "doçent", "av": "avukat"}
 
+# Sayı sonrası birimler (TTS "10 dk"yı "on dakika" okur; hizalama da öyle görmeli —
+# ölçüldü: "dk" harf-harf hizalanınca 'dakika'nın 3 ünlüsü boyunca ağız kilitleniyordu).
+_UNITS = {"km": "kilometre", "cm": "santimetre", "mm": "milimetre", "kg": "kilogram",
+          "gr": "gram", "gb": "gigabayt", "mb": "megabayt", "tb": "terabayt",
+          "kb": "kilobayt", "ml": "mililitre", "lt": "litre", "dk": "dakika",
+          "sn": "saniye", "sa": "saat", "tl": "lira", "m": "metre", "g": "gram", "l": "litre"}
+
+# Sıra sayıları: kardinalin SON kelimesi sıralı biçime döner ("yirmi beş" -> "yirmi beşinci").
+_ORD_LAST = {"bir": "birinci", "iki": "ikinci", "üç": "üçüncü", "dört": "dördüncü",
+             "beş": "beşinci", "altı": "altıncı", "yedi": "yedinci", "sekiz": "sekizinci",
+             "dokuz": "dokuzuncu", "on": "onuncu", "yirmi": "yirminci", "otuz": "otuzuncu",
+             "kırk": "kırkıncı", "elli": "ellinci", "altmış": "altmışıncı",
+             "yetmiş": "yetmişinci", "seksen": "sekseninci", "doksan": "doksanıncı",
+             "yüz": "yüzüncü", "bin": "bininci"}
+
+
+def _ord_tr(n: int) -> str:
+    """1..99 -> Türkçe sıra sayısı okunuşu ("2."->"ikinci", "25."->"yirmi beşinci")."""
+    w = _num_tr(n).split()
+    w[-1] = _ORD_LAST.get(w[-1], w[-1])
+    return " ".join(w)
+
+
+def _frac_tr(b: str) -> str:
+    """Ondalık kesir okunuşu: TTS "41,73"ü "kırk bir virgül YETMİŞ ÜÇ" okur (kardinal),
+    rakam-rakam değil — ölçüldü: rakam-rakam hizalama 0.6s+ sesli-kapalı üretiyordu.
+    Baş-sıfırlı kesirler ("0,05") rakam-rakam kalır ("sıfır beş")."""
+    return _spell_digits(b) if b.startswith("0") else _num_tr(int(b))
+
 
 def _abbrev_pass(text: str) -> str:
     """TAMAMEN-büyük kısaltmaları harf adlarıyla aç: TTS bunları heceler ("te-ce"),
@@ -144,7 +174,16 @@ def normalize_tr(text: str) -> str:
     t = _abbrev_pass(text)
     t = t.translate(_TR_LOWER).lower()
     t = re.sub(r"\b(dr|prof|doç|av)\.", lambda m: _DOT_ABBREV[m.group(1)] + " ", t)
-    # para: ₺150 / 150₺ / 150 TL -> "... lira" (sayıyı sonraki kurallar okur)
+    # e-posta/URL: TTS "@"yı "et", alan-adı noktasını "nokta" okur (ölçüldü) —
+    # hizalama da aynı kelimeleri görmeli, yoksa adres içinde ağız kapalı kalıyor.
+    t = t.replace("@", " et ")
+    t = re.sub(r"(?<=[a-zçğıöşü0-9])\.(?=[a-zçğıöşü]{2,})", " nokta ", t)
+    # sıra sayıları: "2. adım" -> "ikinci adım" (TTS böyle okur; 1-2 hane — yıllar hariç)
+    t = re.sub(r"\b(\d{1,2})\.(?=\s)", lambda m: " " + _ord_tr(int(m.group(1))) + " ", t)
+    # sayı+birim: "10 dk" -> "10 dakika" (TTS birimi açar; sonra sayı kuralı okur)
+    t = re.sub(r"(\d)\s*(km|cm|mm|kg|gr|gb|mb|tb|kb|ml|lt|dk|sn|sa|tl|m|g|l)\b",
+               lambda m: m.group(1) + " " + _UNITS[m.group(2)] + " ", t)
+    # para: ₺150 / 150₺ -> "... lira" (sayıyı sonraki kurallar okur)
     t = re.sub(r"₺\s*(\d[\d.,]*)", r" \1 lira ", t)
     t = re.sub(r"(\d[\d.,]*)\s*₺", r" \1 lira ", t)
     t = t.replace("₺", " lira ").replace("€", " avro ").replace("$", " dolar ")
@@ -154,22 +193,24 @@ def normalize_tr(text: str) -> str:
         num = m.group(1)
         if "," in num:
             a, b = num.split(",", 1)
-            return " yüzde " + _num_tr(int(a)) + " virgül " + _spell_digits(b) + " "
+            return " yüzde " + _num_tr(int(a)) + " virgül " + _frac_tr(b) + " "
         return " yüzde " + _num_tr(int(num)) + " "
     t = re.sub(r"%\s*(\d+(?:,\d+)?)", _pct, t)
     t = re.sub(r"(\d+(?:,\d+)?)\s*%", _pct, t)
     t = re.sub(r"(\d+),(\d+)",
-               lambda m: _num_tr(int(m.group(1))) + " virgül " + _spell_digits(m.group(2)), t)
+               lambda m: _num_tr(int(m.group(1))) + " virgül " + _frac_tr(m.group(2)), t)
     t = re.sub(r"(?<=\d)[./:](?=\d)", " ", t)                      # 15.05.2024, 14:30, 7/24
 
     def _num(m):
         s = m.group(0)
-        if len(s) > 4 or (len(s) > 1 and s[0] == "0"):
+        # rakam-rakam yalnız telefon-benzeri diziler: baş-sıfırlı ("0850") ya da ≥8 hane.
+        # 5-7 haneli çıplak sayılar fiyat/miktar olarak okunur ("54999" -> "elli dört bin
+        # dokuz yüz doksan dokuz") — ölçüldü: rakam-rakam verilince hizalama 0.64s geriliyordu.
+        if (len(s) > 1 and s[0] == "0") or len(s) >= 8:
             return " " + _spell_digits(s) + " "
         return " " + _num_tr(int(s)) + " "
 
     return re.sub(r"\d+", _num, t)
-
 
 _lock = threading.Lock()
 _model = _tokenizer = _aligner = _dict = None
@@ -214,7 +255,7 @@ def _words(text):
     return rom_words, orig_words, vis_words
 
 
-def align_visemes(pcm: bytes, sr: int, text: str, min_ms: int = 35):
+def align_visemes(pcm: bytes, sr: int, text: str, min_ms: int = 20):
     """Force-align text↔WAV and emit letter-timed viseme cues."""
     _ensure()
     x = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
@@ -239,7 +280,66 @@ def align_visemes(pcm: bytes, sr: int, text: str, min_ms: int = 35):
     if not raw:
         return []
     raw.sort(key=lambda r: r[0])
-    tail = max(raw[-1][1], raw[-1][0] + 0.17)     # let the final sound finish, not clip
+
+    # Enerji zarfı (16k): duraklamada ağzı SES GERÇEKTEN KESİLİNCE kapat. Sabit
+    # 60-90ms tutuş, kelime-sonu uzayan hecelerde 0.4-0.7s "konuşurken kapalı ağız"
+    # bırakıyordu (ölçüldü). Sessizlik = p90 enerjinin %18'i altı.
+    x16 = wav.squeeze(0).cpu().numpy()
+    _w = max(1, int(_SR * 0.02))
+    _n16 = len(x16) // _w
+    env16 = (np.sqrt((x16[:_n16 * _w].reshape(_n16, _w) ** 2).mean(axis=1) + 1e-9)
+             if _n16 > 1 else np.zeros(1, dtype=np.float32))
+    sil_thr = max(float(np.percentile(env16, 90)) * 0.18, 1e-4)
+    spk_thr = max(float(np.percentile(env16, 90)) * 0.30, 2e-4)
+
+    def _first_sil(t0, t1, k=6):
+        """t0-t1 içinde en az k ardışık pencere (k*20ms) SÜREKLİ sessizliğin başlangıcı.
+        Tek pencerelik çukurlar (grup arası nefes/dip) kapanış tetiklemesin —
+        ölçüldü: kısa dipte kapanan ağız hemen ardından gelen seste kapalı kalıyordu."""
+        a = max(int(t0 / 0.02), 0)
+        b = min(int(t1 / 0.02), _n16)
+        run = 0
+        for wi in range(a, b):
+            if env16[wi] < sil_thr:
+                run += 1
+                if run >= k:
+                    return (wi - k + 1) * 0.02
+            else:
+                run = 0
+        if 0 < run < k and b == _n16:      # ses dosyanın sonunda sessizlik kısa kalmış
+            return (b - run) * 0.02
+        return None
+
+    def _first_speech(t0, t1):
+        a = max(int(t0 / 0.02), 0)
+        b = min(int(t1 / 0.02), _n16)
+        for wi in range(a, b):
+            if env16[wi] >= spk_thr:
+                return wi * 0.02
+        return None
+
+    # ONSET ÖNE ÇEKME: hizalayıcı sayı/hızlı bölgelerde sonraki kelimenin harflerini
+    # GEÇ yerleştirebiliyor -> duraklamadaki sessizlik molasından sonra ses geri
+    # başlıyor ama ağız kapalı kalıyordu (ölçüldü: 0.5s+). Ses geri başladığı anda
+    # sıradaki harfin onset'ini oraya çek — ağız sesle birlikte açılır.
+    for i in range(len(raw) - 1):
+        s, nxt = raw[i][0], raw[i + 1][0]
+        if nxt - s > 0.22:
+            sil = _first_sil(s + 0.06, nxt - 0.04)
+            if sil is not None:
+                res = _first_speech(sil + 0.04, nxt - 0.04)
+                if res is not None and nxt - res > 0.06:
+                    o = raw[i + 1]
+                    raw[i + 1] = (res, o[1], o[2], o[3], o[4])
+
+    # let the final sound finish, but never exceed the actual audio (players held a
+    # stale shape ~130ms past end-of-audio — measured, deterministic). Aligner'ın son
+    # onset'i her zaman ses içindedir -> audio_dur tavanı güvenli, +taban GEREKMEZ
+    # (önceki +0.05 taban guard'ı 30ms taşma yaratıyordu — ölçüldü).
+    audio_dur = (len(pcm) // 2) / sr
+    tail = min(max(raw[-1][1], raw[-1][0] + 0.17), audio_dur)
+    if tail <= raw[-1][0]:
+        tail = raw[-1][0] + 0.02
 
     cues = []
 
@@ -256,14 +356,27 @@ def align_visemes(pcm: bytes, sr: int, text: str, min_ms: int = 35):
         push(0.0, raw[0][0], "rest", 0, "_")
     for i, (s, _e, ch, name, vid) in enumerate(raw):
         nxt = raw[i + 1][0] if i + 1 < len(raw) else tail
+        # aligner çok hızlı bölgede iki harfi AYNI frame'e koyabiliyor -> süre 0 olur
+        # ve push tamamen atlardı (ölçüldü: 'com nokta tr' kuyruğunda 5-7 harf birden
+        # yutuldu). 25ms taban ver (3-hane yuvarlama 20ms'yi 0.019'a düşürüp katlamaya
+        # yakalatabiliyordu); finalize monotonluğu ayrıştırır.
+        if nxt <= s:
+            nxt = s + 0.025
         gap = nxt - s
         if gap > 0.22:
-            # Pause: show the last sound briefly, then CLOSE for the silence. Longer
-            # (sentence-level) pauses close sooner so the mouth doesn't linger open
-            # between sentences — settle to rest and stay relaxed until the next one.
-            hold = 0.06 if gap > 0.45 else 0.09
-            push(s, s + hold, name, vid, ch)
-            push(s + hold, nxt, "rest", 0, "_")
+            # Duraklama: son sesi SES KESİLENE KADAR tut, sonra kapat (enerji-ölçümlü).
+            # Cümle sonunda ses hızla kesilir -> hızlı kapanış korunur; kelime-sonu
+            # uzayan hecede ses sürer -> ağız konuşurken kapanmaz. Donma tavanı 0.40s.
+            sil = _first_sil(s + 0.06, nxt - 0.04)
+            if sil is None and gap <= 0.44:
+                push(s, nxt, name, vid, ch)          # ses hiç kesilmiyor: kapatma
+            else:
+                hold_end = sil if sil is not None else s + 0.40
+                # 0.42 mutlak tavan: sessizlik geç başlarsa bile tek şekil donma
+                # eşiğini (0.45) aşmasın
+                hold_end = min(max(hold_end, s + 0.06), nxt - 0.02, s + 0.42)
+                push(s, hold_end, name, vid, ch)
+                push(hold_end, nxt, "rest", 0, "_")
         else:
             push(s, nxt, name, vid, ch)
 
@@ -286,6 +399,9 @@ def align_visemes(pcm: bytes, sr: int, text: str, min_ms: int = 35):
         else:
             merged.append(dict(c))
     return merged
+
+
+import re
 
 
 def split_sentences(text, max_len=140):
@@ -381,6 +497,12 @@ def finalize(cues, openness=1.0, base_mix=0.09):
     for i, c in enumerate(cues):
         prev_rest = i > 0 and cues[i - 1]["id"] == 0
         starts.append(max(0.0, c["offset"] - (0.0 if prev_rest else LEAD)))
+    # monotonluk: rest-sonrası cue (lead'siz) ile sıradaki cue (lead'li) AYNI anda
+    # başlayabiliyordu -> oynatıcıda ilk şekil 0ms'de eziliyordu (ölçüldü: 'dün' d+ü
+    # üst üste). Her start bir öncekinden en az 20ms sonra.
+    for i in range(1, n):
+        if starts[i] < starts[i - 1] + 0.02:
+            starts[i] = starts[i - 1] + 0.02
     out = []
     for i, c in enumerate(cues):
         st = starts[i]
@@ -396,4 +518,24 @@ def finalize(cues, openness=1.0, base_mix=0.09):
             "alpha": round(openness * OPEN_MAP.get(cid, 1.0), 3),
             "mix": round(mix, 3), "phoneme": c["ph"],
         })
+    # kuyruk clamp'i: monotonluk kaydırması kalabalık sonlarda cue'ları ses süresinin
+    # ötesine itebiliyordu (ölçüldü ~20-60ms). Geriye doğru sıkıştır — ham cue'ların
+    # sonu (align_visemes zaten ses süresine clamp'li) tavandır.
+    cap = cues[-1]["end"]
+    for c in reversed(out):
+        if c["end"] > cap:
+            c["end"] = round(cap, 3)
+        if c["start"] >= c["end"]:
+            c["start"] = round(max(0.0, c["end"] - 0.02), 3)
+        cap = c["start"]
     return out
+
+
+if __name__ == "__main__":
+    import sys, soundfile as sf, json
+    wav_path, text = sys.argv[1], sys.argv[2]
+    data, sr = sf.read(wav_path, dtype="int16", always_2d=True)
+    mono = data[:, 0].astype("<i2").tobytes()
+    cues = finalize(align_visemes(mono, sr, text))
+    print(f"{len(cues)} cues over {cues[-1]['end'] if cues else 0:.2f}s")
+    print(json.dumps(cues[:18], ensure_ascii=False, indent=0))
