@@ -38,7 +38,9 @@ yani `finalize`'dan ÖNCE çağrılır**; finalized cue'lara uygulanırsa KeyErr
 verir), `split_sentences(text)`
 (uzun metni cümlelere böler — streaming/parça-parça TTS senaryosunda
 kullanışlı), `normalize_tr(text)` (yalnız hizalayıcının gördüğü metni
-normalize eder; TTS'e giden asıl metni DEĞİŞTİRMEZ).
+normalize eder; TTS'e giden asıl metni DEĞİŞTİRMEZ — rakamlar, ondalıklar,
+sıra sayıları "2."→"ikinci", birimler "dk"→"dakika", kısaltmalar, e-posta/URL
+"@"→"et"/"nokta", %/tarih/saat/₺, İ/I küçültme).
 
 ## Bir projeye entegre ederken
 

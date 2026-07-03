@@ -31,9 +31,12 @@ olsun) — Vislign'ı sesin üstüne aynen takabilirsin.
 
 ## Nasıl çalışır (kısaca)
 
-1. **Metni normalize et** — rakamları okunuşa çevir ("2024" → "iki bin yirmi
-   dört"), kısaltmaları hecele ("KVKK" → "ka ve ka ka"), %/tarih/saat/₺ gibi
-   işaretleri sözcüğe çevir, Türkçe büyük/küçük harf kurallarını uygula.
+1. **Metni normalize et** — TTS'in gerçekte SÖYLEDİĞİ kelimelere çevir:
+   rakamlar ("2024" → "iki bin yirmi dört"), ondalıklar ("41,73" → "kırk bir
+   virgül yetmiş üç"), sıra sayıları ("2. adım" → "ikinci adım"), birimler
+   ("10 dk" → "on dakika"), kısaltmalar ("KVKK" → "ka ve ka ka"), e-posta/URL
+   ("@" → "et", alan noktası → "nokta"), %/tarih/saat/₺ işaretleri ve Türkçe
+   büyük/küçük harf kuralları (İ/I).
 2. **Metin + sesi hizala** — açık kaynak bir konuşma-hizalama modeli
    (`torchaudio`'nun MMS Forced Aligner'ı) her harfin sesin içinde tam olarak
    nerede başlayıp bittiğini çıkarır.
@@ -41,9 +44,11 @@ olsun) — Vislign'ı sesin üstüne aynen takabilirsin.
    şekline (a, e, i/ı, o/ö, u/ü, kapalı dudak, vb.) eşlenir. Örneğin yumuşak
    **ğ** kendi başına şekil almaz, kendinden önceki ünlüyü uzatır — gerçek
    ağız da böyle davranır.
-4. **Titremeyi/donmayı temizle** — çok kısa şekilleri komşusuna katarak
-   titremeyi, çok uzun donuk şekilleri bölerek donmayı önler; cümle
-   başı/sonunda ağız yumuşak açılıp kapanır.
+4. **Titremeyi/donmayı temizle, duraklamayı sesle kapat** — çok kısa şekilleri
+   toparlayarak titremeyi, çok uzun donuk şekilleri bölerek donmayı önler.
+   Duraklamalarda ağız sabit bir zamanlayıcıyla değil, **ses gerçekten
+   kesildiğinde** kapanır (enerji ölçümlü) — kelime-sonu uzayan hecelerde ağız
+   konuşurken kapanmaz, cümle sonunda ise hızlıca kapanır.
 
 Çıktı, oynatmaya hazır bir zaman çizelgesi (JSON) — istediğin avatar/rig'e
 bağlayabilirsin.
