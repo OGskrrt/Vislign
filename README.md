@@ -80,6 +80,29 @@ Ya da komut satırından:
 python example.py ornek.wav "Merhaba, nasılsın?"
 ```
 
+### Cümle + kelime zaman çizelgesi (altyazı/karaoke)
+
+Aynı hizalama geçişinden **cümle ve kelime zamanları** da alınabilir — viseme'ler
+ve sesle örnek-düzeyinde tutarlıdır (altyazı vurgulama, karaoke, kelime-kelime
+highlight için):
+
+```python
+from vislign import align_visemes_ex, finalize
+
+ex = align_visemes_ex(pcm, sr, "Alışkanlıklarınız kimliğinizi nasıl şekillendirir?")
+cues = finalize(ex["cues"])
+ex["sentences"]
+# [{"id": 1, "text": "Alışkanlıklarınız kimliğinizi nasıl şekillendirir?",
+#   "start": 0.64, "end": 3.77,
+#   "words": [{"id": 1, "text": "Alışkanlıklarınız", "start": 0.64, "end": 1.77},
+#             {"id": 2, "text": "kimliğinizi",       "start": 1.77, "end": 2.47},
+#             ...]}]
+```
+
+Kelime metinleri **orijinal** yazımıyla döner ("2028'de", "%50", "2. adım" gibi
+normalize edilen ifadeler dahil) — zamanlar, normalize edilip hizalanan
+karşılıklarından geri eşlenir.
+
 ## Çıktı formatı
 
 `finalize()` her biri kendi kendini anlatan cue'lardan oluşan **bir liste**

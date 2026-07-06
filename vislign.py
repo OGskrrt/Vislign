@@ -15,6 +15,9 @@ table and `normalize_tr`.
 
 Two stages:
   align_visemes(pcm, sr, text) -> raw cues [{offset,end,value,id,ph}]  (true phoneme timing)
+  align_visemes_ex(pcm, sr, text) -> {"cues": raw cues, "sentences": [...]}:
+       sentences = sentence+word timeline ({id,text,start,end,words:[...]}) from
+       the SAME alignment pass — sample-accurate subtitles/karaoke highlighting.
   finalize(cues, openness, base_mix) -> FINISHED animation cues, ready to play:
        each cue fully specifies {start,end,viseme,rigId,alpha,mix,phoneme} with
        anticipation lead + pause smoothing already baked in. `viseme` is a
@@ -256,6 +259,20 @@ def _words(text):
 
 
 def align_visemes(pcm: bytes, sr: int, text: str, min_ms: int = 20):
+    """Ham viseme cue'ları döndürür (geri uyumlu sarmalayıcı)."""
+    return _align_impl(pcm, sr, text, min_ms)[0]
+
+
+def align_visemes_ex(pcm: bytes, sr: int, text: str, min_ms: int = 20):
+    """Genişletilmiş çıktı: {"cues": ham viseme cue'ları,
+    "sentences": [{id,text,start,end,words:[{id,text,start,end}]}]}.
+    Kelime/cümle zamanları AYNI hizalama geçişinden gelir -> ses ve viseme'lerle
+    örnek-düzeyinde tutarlıdır (altyazı/karaoke vurgulama için)."""
+    cues, wspans, audio_dur = _align_impl(pcm, sr, text, min_ms)
+    return {"cues": cues, "sentences": _build_sentences(text, wspans, audio_dur)}
+
+
+def _align_impl(pcm: bytes, sr: int, text: str, min_ms: int = 20):
     """Force-align text↔WAV and emit letter-timed viseme cues."""
     _ensure()
     x = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
@@ -265,7 +282,7 @@ def align_visemes(pcm: bytes, sr: int, text: str, min_ms: int = 20):
         wav = torchaudio.functional.resample(wav, sr, _SR)
     rom_words, orig_words, vis_words = _words(text)
     if not rom_words:
-        return []
+        return [], [], 0.0
     with torch.inference_mode():
         emission, _ = _model(wav)
         token_spans = _aligner(emission[0], _tokenizer(rom_words))
@@ -274,11 +291,13 @@ def align_visemes(pcm: bytes, sr: int, text: str, min_ms: int = 20):
     # Forced alignment marks each letter's PEAK frame (~20 ms), not its full span.
     # A letter actually lasts until the NEXT letter's onset, so chain by onset time.
     raw = []  # (onset, peak_end, orig_char, viseme_name, rig_id)
+    wspans = []  # normalize-edilmiş kelime başına (ilk-harf onset, son-harf peak-end)
     for spans, og, vg in zip(token_spans, orig_words, vis_words):
+        wspans.append((spans[0].start * ratio, spans[-1].end * ratio))
         for span, ch, (name, vid) in zip(spans, og, vg):
             raw.append((span.start * ratio, span.end * ratio, ch, name, vid))
     if not raw:
-        return []
+        return [], [], 0.0
     raw.sort(key=lambda r: r[0])
 
     # Enerji zarfı (16k): duraklamada ağzı SES GERÇEKTEN KESİLİNCE kapat. Sabit
@@ -398,7 +417,81 @@ def align_visemes(pcm: bytes, sr: int, text: str, min_ms: int = 20):
             merged[-1]["end"] = c["end"]
         else:
             merged.append(dict(c))
-    return merged
+    return merged, wspans, audio_dur
+
+
+def _count_aligned_words(token: str) -> int:
+    """Bir ORİJİNAL kelimenin normalize sonrası kaç hizalanmış kelimeye açıldığı
+    ("2028'de" -> 5: iki bin yirmi sekiz 'de). _words ile AYNI filtre kullanılır.
+    Sondaki boşluk, kelime-sonu kurallarını (ör. sıra sayısı "2.") tetiklemek için."""
+    n = 0
+    for w in normalize_tr(token + " ").split():
+        for ch in w:
+            r = ch.translate(_ROMANIZE)
+            if r in _dict and r not in ("-", "'", "*"):
+                n += 1
+                break
+    return n
+
+
+_SENT_END = re.compile(r'[.!?…]["\'"»\)\]]*$')
+_ORDINAL_TOK = re.compile(r'^\d{1,2}\.$')
+_ABBREV_TOK = re.compile(r'^(dr|prof|doç|av)\.$', re.IGNORECASE)
+
+
+def _build_sentences(text: str, wspans, audio_dur: float):
+    """Orijinal metni cümle+kelimelere böl, her kelimeye hizalanmış zaman ver.
+    Eşleme: her orijinal kelime normalize'da kaç kelimeye açılıyorsa o kadar
+    hizalanmış span tüketir -> ses/viseme ile örnek-düzeyinde tutarlı."""
+    tokens = text.split()
+    if not tokens or not wspans:
+        return []
+    counts = [_count_aligned_words(t) for t in tokens]
+    # güvence: toplam sayım hizalanan kelime sayısını tutmalı; sapma olursa
+    # (görülmedi ama) farkı son konuşulan kelimeye yansıt — monotonluk bozulmaz
+    diff = len(wspans) - sum(counts)
+    if diff:
+        print(f"[vislign] sentence-map uyarı: kelime sayımı {sum(counts)} != hizalanan {len(wspans)} (fark {diff})")
+        for i in range(len(counts) - 1, -1, -1):
+            if counts[i] > 0 or diff > 0:
+                counts[i] = max(0, counts[i] + diff)
+                break
+
+    words_timed = []          # (token, start|None, end|None)
+    p = 0
+    prev_end = 0.0
+    for tok, k in zip(tokens, counts):
+        if k <= 0 or p >= len(wspans):
+            words_timed.append((tok, prev_end, prev_end))   # konuşulmayan token (saf noktalama)
+            continue
+        last = min(p + k - 1, len(wspans) - 1)
+        start = wspans[p][0]
+        nxt_onset = wspans[last + 1][0] if last + 1 < len(wspans) else audio_dur
+        end = min(nxt_onset, wspans[last][1] + 0.30, audio_dur)
+        end = max(end, start + 0.02)
+        words_timed.append((tok, start, end))
+        prev_end = end
+        p = last + 1
+
+    sentences = []
+    cur = []
+    for i, (tok, s, e) in enumerate(words_timed):
+        cur.append((tok, s, e))
+        is_end = (_SENT_END.search(tok) and not _ORDINAL_TOK.match(tok)
+                  and not _ABBREV_TOK.match(tok))
+        if is_end or i == len(words_timed) - 1:
+            spoken = [(t, a, b) for (t, a, b) in cur if b > a]
+            sent = {
+                "id": len(sentences) + 1,
+                "text": " ".join(t for t, _a, _b in cur),
+                "start": round(spoken[0][1] if spoken else cur[0][1], 2),
+                "end": round(spoken[-1][2] if spoken else cur[-1][2], 2),
+                "words": [{"id": j + 1, "text": t, "start": round(a, 2), "end": round(b, 2)}
+                          for j, (t, a, b) in enumerate(cur)],
+            }
+            sentences.append(sent)
+            cur = []
+    return sentences
 
 
 import re
